@@ -754,6 +754,32 @@ button:focus-visible,input:focus-visible,select:focus-visible{
   letter-spacing:.035em;
 }
 
+
+.prono-empty{
+  padding:18px 10px;
+  text-align:center;
+  font-size:.82rem;
+  line-height:1.5;
+  opacity:.72;
+}
+.prono-person-name .you-badge{
+  display:inline-block;
+  margin-left:6px;
+  padding:3px 6px;
+  border-radius:999px;
+  background:rgba(79,127,191,.12);
+  color:var(--blue);
+  font-size:.62rem;
+  font-weight:900;
+  vertical-align:middle;
+}
+.prono-subline{
+  margin-top:7px;
+  font-size:.70rem;
+  line-height:1.45;
+  opacity:.66;
+}
+
 #confettiCanvas{position:fixed;inset:0;z-index:300;pointer-events:none}
 
 @media(max-width:370px){
@@ -1181,42 +1207,187 @@ function escapeHtml(v){
   return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 }
 
-function submitProno(){
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycby4TC7QrZPA9whIfse55fO5Y33YLkivpF98Zsdn0hsXTO3dZevzhjqylfSUcwkHX7YA/exec';
+let pronoJustSubmitted = null;
+
+async function submitProno(){
   const d=getData();
-  try{
-    localStorage.setItem('mpp-baby-prono-'+d.prenom.toLowerCase(),JSON.stringify(d));
-  }catch(e){}
-
-  launchConfetti();
-
   const submitBtn=document.getElementById('submit-prono-btn');
+  const othersBtn=document.getElementById('other-pronos-btn');
+  const hint=document.getElementById('other-pronos-hint');
+  const toast=document.getElementById('toast');
+
+  if(!d.prenom){
+    toast.textContent='Indique ton prénom avant de valider 🙂';
+    toast.classList.add('show');
+    setTimeout(()=>toast.classList.remove('show'),2600);
+    return;
+  }
+
   if(submitBtn){
-    submitBtn.textContent='PRONO VALIDÉ ✓';
+    submitBtn.textContent='ENREGISTREMENT…';
     submitBtn.disabled=true;
   }
 
-  const othersBtn=document.getElementById('other-pronos-btn');
-  const hint=document.getElementById('other-pronos-hint');
-  if(othersBtn){
-    othersBtn.disabled=false;
-    othersBtn.innerHTML='👀 VOIR LES PRONOS DES AUTRES';
-  }
-  if(hint){
-    hint.textContent='Ton prono est validé : tu peux maintenant regarder les autres 😏';
-  }
+  try{
+    const body = new URLSearchParams();
+    Object.entries(d).forEach(([k,v])=>body.append(k,v ?? ''));
 
-  const toast=document.getElementById('toast');
-  toast.textContent='Prono enregistré ✓';
-  toast.classList.add('show');
-  setTimeout(()=>toast.classList.remove('show'),2600);
+    await fetch(WEB_APP_URL,{
+      method:'POST',
+      mode:'no-cors',
+      headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+      body:body.toString()
+    });
+
+    try{
+      localStorage.setItem('mpp-baby-prono-'+d.prenom.toLowerCase(),JSON.stringify(d));
+    }catch(e){}
+
+    pronoJustSubmitted = d;
+    launchConfetti();
+
+    if(submitBtn){
+      submitBtn.textContent='PRONO VALIDÉ ✓';
+      submitBtn.disabled=true;
+    }
+    if(othersBtn){
+      othersBtn.disabled=false;
+      othersBtn.innerHTML='👀 VOIR LES PRONOS DES AUTRES';
+    }
+    if(hint){
+      hint.textContent='Ton prono est validé : tu peux maintenant regarder les autres 😏';
+    }
+
+    toast.textContent='Prono envoyé ✓';
+    toast.classList.add('show');
+    setTimeout(()=>toast.classList.remove('show'),2600);
+
+  }catch(err){
+    console.error(err);
+    if(submitBtn){
+      submitBtn.textContent='VALIDER MON PRONO';
+      submitBtn.disabled=false;
+    }
+    toast.textContent='Oups… impossible d’envoyer le prono. Réessaie.';
+    toast.classList.add('show');
+    setTimeout(()=>toast.classList.remove('show'),3200);
+  }
 }
 
 function openPronosModal(){
   const modal=document.getElementById('pronosModal');
   const btn=document.getElementById('other-pronos-btn');
   if(!modal || !btn || btn.disabled) return;
+
   modal.classList.add('open');
   document.body.style.overflow='hidden';
+  loadOtherPronos();
+}
+
+function loadOtherPronos(){
+  const list=document.getElementById('otherPronosList');
+  const status=document.getElementById('pronosStatus');
+
+  if(list) list.innerHTML='<div class="prono-empty">Chargement des pronostics… 🐐</div>';
+  if(status) status.innerHTML='⏳ Récupération des pronostics déjà validés…';
+
+  const callbackName='mppPronosCallback_'+Date.now();
+
+  window[callbackName]=function(payload){
+    try{
+      if(!payload || !payload.ok){
+        throw new Error(payload && payload.error ? payload.error : 'Réponse invalide');
+      }
+      renderOtherPronos(payload.pronos || []);
+    }catch(err){
+      console.error(err);
+      if(list) list.innerHTML='<div class="prono-empty">Impossible de charger les pronostics pour le moment.</div>';
+      if(status) status.innerHTML='⚠️ Une erreur est survenue pendant le chargement.';
+    }finally{
+      delete window[callbackName];
+      const s=document.getElementById(callbackName);
+      if(s) s.remove();
+    }
+  };
+
+  const script=document.createElement('script');
+  script.id=callbackName;
+  script.src=WEB_APP_URL+'?action=list&callback='+encodeURIComponent(callbackName)+'&_='+Date.now();
+  script.onerror=function(){
+    if(list) list.innerHTML='<div class="prono-empty">Impossible de charger les pronostics pour le moment.</div>';
+    if(status) status.innerHTML='⚠️ Vérifie que l’application Apps Script est bien déployée pour « Tout le monde ».';
+    delete window[callbackName];
+    script.remove();
+  };
+  document.body.appendChild(script);
+}
+
+function sameProno(a,b){
+  if(!a || !b) return false;
+  return String(a.prenom||'').trim().toLowerCase()===String(b.prenom||'').trim().toLowerCase()
+    && String(a.dateNaissance||'')===String(b.dateNaissance||'')
+    && String(a.prenomBebe1||'').trim().toLowerCase()===String(b.prenomBebe1||'').trim().toLowerCase()
+    && String(a.prenomBebe2||'').trim().toLowerCase()===String(b.prenomBebe2||'').trim().toLowerCase()
+    && String(a.prenomBebe3||'').trim().toLowerCase()===String(b.prenomBebe3||'').trim().toLowerCase();
+}
+
+function renderOtherPronos(pronos){
+  const list=document.getElementById('otherPronosList');
+  const status=document.getElementById('pronosStatus');
+  if(!list) return;
+
+  let items=Array.isArray(pronos) ? pronos.slice() : [];
+
+  // Le prono fraîchement envoyé est normalement la dernière ligne :
+  // on retire une seule occurrence identique pour n'afficher que "les autres".
+  if(pronoJustSubmitted){
+    for(let i=items.length-1;i>=0;i--){
+      if(sameProno(items[i],pronoJustSubmitted)){
+        items.splice(i,1);
+        break;
+      }
+    }
+  }
+
+  if(status){
+    status.innerHTML = items.length
+      ? '👀 <strong>'+items.length+'</strong> pronostic'+(items.length>1?'s':'')+' déjà joué'+(items.length>1?'s':'')+' avant toi.'
+      : '👀 Tu es le premier à avoir joué… pour l’instant 😏';
+  }
+
+  if(!items.length){
+    list.innerHTML='<div class="prono-empty">Aucun autre pronostic à afficher pour le moment.</div>';
+    return;
+  }
+
+  list.innerHTML=items.map((p,idx)=>{
+    const names=[p.prenomBebe1,p.prenomBebe2,p.prenomBebe3].filter(Boolean).map(escapeHtml).join(' / ');
+    const date=p.dateNaissance ? fmtDate(p.dateNaissance) : '—';
+    const tags=[
+      '📅 '+date,
+      p.poids ? '⚖️ '+escapeHtml(p.poids)+' g' : '',
+      p.taille ? '📏 '+escapeHtml(p.taille)+' cm' : '',
+      p.moment ? '🕐 '+escapeHtml(p.moment) : '',
+      p.originePrenom ? '🌍 '+escapeHtml(p.originePrenom) : ''
+    ].filter(Boolean);
+
+    const details=[
+      p.terme ? 'Terme : '+escapeHtml(p.terme) : '',
+      p.premierPleur ? 'Premier à pleurer : '+escapeHtml(p.premierPleur) : '',
+      p.cheveux ? 'Cheveux : '+escapeHtml(p.cheveux) : '',
+      p.prenomCompose ? 'Prénom composé : '+escapeHtml(p.prenomCompose) : ''
+    ].filter(Boolean).join(' · ');
+
+    return '<div class="prono-person">'+
+      '<div class="prono-person-name">'+escapeHtml(p.prenom || ('Participant '+(idx+1)))+'</div>'+
+      '<div class="prono-tags">'+
+        tags.map(t=>'<span class="prono-tag">'+t+'</span>').join('')+
+        (names ? '<span class="prono-tag">🏆 '+names+'</span>' : '')+
+      '</div>'+
+      (details ? '<div class="prono-subline">'+details+'</div>' : '')+
+    '</div>';
+  }).join('');
 }
 
 function closePronosModal(event){
@@ -1315,30 +1486,15 @@ function animateConfetti(){
       <button class="pronos-close" type="button" onclick="closePronosModal()" aria-label="Fermer">×</button>
     </div>
 
-    <div class="demo-note">
-      🧪 <strong>Mode démo :</strong> quand le site sera connecté à la base commune,
-      cette fenêtre affichera automatiquement les vrais pronostics des participants ayant déjà validé.
+    <div class="demo-note" id="pronosStatus">
+      🐐 Les pronostics déjà validés vont apparaître ici.
     </div>
 
     <div id="otherPronosList">
       <div class="prono-person">
-        <div class="prono-person-name">Exemple — Joueur 1</div>
-        <div class="prono-tags">
-          <span class="prono-tag">📅 27/11</span>
-          <span class="prono-tag">⚖️ 3 420 g</span>
-          <span class="prono-tag">📏 51 cm</span>
-          <span class="prono-tag">🏆 Arthur / Malo / Liam</span>
-        </div>
+        <div class="prono-person-name">Chargement des pronostics…</div>
       </div>
-      <div class="prono-person">
-        <div class="prono-person-name">Exemple — Joueur 2</div>
-        <div class="prono-tags">
-          <span class="prono-tag">📅 01/12</span>
-          <span class="prono-tag">⚖️ 3 600 g</span>
-          <span class="prono-tag">📏 52 cm</span>
-          <span class="prono-tag">🏆 Noah / Jules / Sacha</span>
-        </div>
-      </div>
+    </div>
     </div>
   </div>
 </div>
