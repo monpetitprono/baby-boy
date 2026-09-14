@@ -814,7 +814,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{
   .step.active{animation:none}
 }
 </style>
-<!-- PETIT PRONO V12 - APPS SCRIPT IFRAME -->
+<!-- PETIT PRONO V13 - NO-CORS GOOGLE SHEET POST -->
 </head>
 <body>
 <canvas id="confettiCanvas"></canvas>
@@ -1242,51 +1242,27 @@ function makeSubmissionId(){
   return currentSubmissionId;
 }
 
-function postPronoWithIframe(data){
-  return new Promise((resolve,reject)=>{
-    const frame=document.getElementById('sheetPostFrame');
-    if(!frame){
-      reject(new Error('Iframe d’envoi introuvable'));
-      return;
-    }
+async function sendPronoToGoogle(data){
+  const body = new URLSearchParams();
 
-    const form=document.createElement('form');
-    form.method='POST';
-    form.action=WEB_APP_URL;
-    form.target='sheetPostFrame';
-    form.style.display='none';
+  Object.entries(data).forEach(([key,value])=>{
+    body.append(key, value ?? '');
+  });
 
-    Object.entries(data).forEach(([key,value])=>{
-      const input=document.createElement('input');
-      input.type='hidden';
-      input.name=key;
-      input.value=value ?? '';
-      form.appendChild(input);
-    });
-
-    let finished=false;
-    const cleanup=()=>{
-      frame.removeEventListener('load',onLoad);
-      if(form.parentNode) form.parentNode.removeChild(form);
-    };
-
-    const onLoad=()=>{
-      if(finished) return;
-      finished=true;
-      cleanup();
-      resolve();
-    };
-
-    frame.addEventListener('load',onLoad,{once:true});
-    document.body.appendChild(form);
-    form.submit();
-
-    setTimeout(()=>{
-      if(finished) return;
-      finished=true;
-      cleanup();
-      reject(new Error('Délai d’envoi dépassé'));
-    },12000);
+  /*
+    Google Apps Script accepte bien l'envoi, mais ne permet pas au navigateur
+    GitHub Pages de lire sa réponse à cause des règles cross-origin.
+    mode:'no-cors' permet donc d'envoyer le formulaire sans attendre de lire
+    le contenu de la réponse. Si la requête réseau part correctement,
+    la Promise se résout avec une réponse opaque.
+  */
+  await fetch(WEB_APP_URL,{
+    method:'POST',
+    mode:'no-cors',
+    headers:{
+      'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'
+    },
+    body:body.toString()
   });
 }
 
@@ -1313,7 +1289,7 @@ async function submitProno(){
   }
 
   try{
-    await postPronoWithIframe(d);
+    await sendPronoToGoogle(d);
 
     try{
       localStorage.setItem(
@@ -1338,7 +1314,7 @@ async function submitProno(){
       hint.textContent='Ton prono est enregistré : tu peux maintenant regarder les autres 😏';
     }
 
-    toast.textContent='Prono enregistré ✓';
+    toast.textContent='Prono envoyé à Google Sheet ✓';
     toast.classList.add('show');
     setTimeout(()=>toast.classList.remove('show'),2800);
 
@@ -1350,7 +1326,7 @@ async function submitProno(){
       submitBtn.disabled=false;
     }
 
-    toast.textContent='Impossible de joindre Google Apps Script. Réessaie.';
+    toast.textContent='Impossible d’envoyer le prono. Vérifie ta connexion puis réessaie.';
     toast.classList.add('show');
     setTimeout(()=>toast.classList.remove('show'),3500);
   }
@@ -1370,7 +1346,12 @@ function openPronosModal(){
     t:Date.now().toString()
   });
 
-  iframe.src=WEB_APP_URL+'?'+params.toString();
+  const pronosUrl=WEB_APP_URL+'?'+params.toString();
+  iframe.src=pronosUrl;
+
+  const external=document.getElementById('openPronosExternal');
+  if(external) external.href=pronosUrl;
+
   modal.classList.add('open');
   document.body.style.overflow='hidden';
 }
@@ -1473,6 +1454,15 @@ function animateConfetti(){
 
     <div class="demo-note">
       🐐 Voici les pronostics réellement enregistrés avant le tien.
+      <div style="margin-top:8px">
+        <a id="openPronosExternal"
+           href="#"
+           target="_blank"
+           rel="noopener noreferrer"
+           style="font-weight:800;color:var(--blue);text-decoration:none;">
+          ↗ Ouvrir dans un nouvel onglet si l'affichage ne charge pas
+        </a>
+      </div>
     </div>
 
     <iframe
