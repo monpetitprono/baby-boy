@@ -755,6 +755,17 @@ button:focus-visible,input:focus-visible,select:focus-visible{
 }
 
 
+.api-status{
+  width:min(420px,94vw);
+  margin:10px auto 0;
+  text-align:center;
+  font-size:.69rem;
+  line-height:1.4;
+  opacity:.72;
+}
+.api-status.ok{ color:#2f7d4d; opacity:1; font-weight:800; }
+.api-status.err{ color:#b33d48; opacity:1; font-weight:800; }
+
 .prono-empty{
   padding:18px 10px;
   text-align:center;
@@ -762,22 +773,19 @@ button:focus-visible,input:focus-visible,select:focus-visible{
   line-height:1.5;
   opacity:.72;
 }
-.prono-person-name .you-badge{
-  display:inline-block;
-  margin-left:6px;
-  padding:3px 6px;
-  border-radius:999px;
-  background:rgba(79,127,191,.12);
-  color:var(--blue);
-  font-size:.62rem;
-  font-weight:900;
-  vertical-align:middle;
-}
 .prono-subline{
   margin-top:7px;
   font-size:.70rem;
   line-height:1.45;
   opacity:.66;
+}
+.hidden-post-frame{
+  position:absolute;
+  width:1px;
+  height:1px;
+  opacity:0;
+  pointer-events:none;
+  border:0;
 }
 
 #confettiCanvas{position:fixed;inset:0;z-index:300;pointer-events:none}
@@ -791,6 +799,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{
   .step.active{animation:none}
 }
 </style>
+<!-- PETIT PRONO V11.1 - GOOGLE SHEET LIVE + VERIFIED POST -->
 </head>
 <body>
 <canvas id="confettiCanvas"></canvas>
@@ -1093,6 +1102,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{
     <p class="other-pronos-hint" id="other-pronos-hint">
       Disponible après validation de ton propre prono 😉
     </p>
+    <div class="api-status" id="apiStatus">Connexion Google Sheet : vérification…</div>
   </div>
 
   <div class="birth-list-box">
@@ -1210,12 +1220,111 @@ function escapeHtml(v){
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycby4TC7QrZPA9whIfse55fO5Y33YLkivpF98Zsdn0hsXTO3dZevzhjqylfSUcwkHX7YA/exec';
 let pronoJustSubmitted = null;
 
+function apiJsonp(params, timeoutMs=8000){
+  return new Promise((resolve,reject)=>{
+    const cb='mppCb_'+Date.now()+'_'+Math.floor(Math.random()*100000);
+    const script=document.createElement('script');
+    let done=false;
+
+    const cleanup=()=>{
+      if(done) return;
+      done=true;
+      delete window[cb];
+      if(script.parentNode) script.parentNode.removeChild(script);
+      clearTimeout(timer);
+    };
+
+    window[cb]=(payload)=>{
+      cleanup();
+      resolve(payload);
+    };
+
+    const qs=new URLSearchParams(Object.assign({},params,{callback:cb,_:Date.now()}));
+    script.src=WEB_APP_URL+'?'+qs.toString();
+    script.onerror=()=>{
+      cleanup();
+      reject(new Error('Connexion Apps Script impossible'));
+    };
+
+    const timer=setTimeout(()=>{
+      cleanup();
+      reject(new Error('Délai de connexion dépassé'));
+    },timeoutMs);
+
+    document.body.appendChild(script);
+  });
+}
+
+async function checkApiConnection(){
+  const status=document.getElementById('apiStatus');
+  try{
+    const payload=await apiJsonp({action:'list'},7000);
+    if(!payload || payload.ok!==true) throw new Error(payload?.error || 'Réponse invalide');
+    if(status){
+      status.textContent='Google Sheet connectée ✓';
+      status.className='api-status ok';
+    }
+    return true;
+  }catch(err){
+    console.error('API check:',err);
+    if(status){
+      status.textContent='Google Sheet non joignable ⚠️';
+      status.className='api-status err';
+    }
+    return false;
+  }
+}
+
+async function postPronoNoCors(d){
+  const body=new URLSearchParams();
+  Object.entries(d).forEach(([key,value])=>body.append(key,value ?? ''));
+
+  // no-cors permet l'envoi depuis GitHub Pages vers Apps Script.
+  // On ne fait PAS confiance au résultat opaque : waitUntilPronoExists()
+  // vérifie ensuite que la ligne existe réellement dans Google Sheet.
+  await fetch(WEB_APP_URL,{
+    method:'POST',
+    mode:'no-cors',
+    body:body
+  });
+}
+
+function normalize(v){
+  return String(v ?? '').trim().toLowerCase();
+}
+
+function sameProno(a,b){
+  if(!a || !b) return false;
+  return normalize(a.prenom)===normalize(b.prenom)
+    && String(a.dateNaissance||'')===String(b.dateNaissance||'')
+    && normalize(a.prenomBebe1)===normalize(b.prenomBebe1)
+    && normalize(a.prenomBebe2)===normalize(b.prenomBebe2)
+    && normalize(a.prenomBebe3)===normalize(b.prenomBebe3);
+}
+
+async function waitUntilPronoExists(d){
+  // Apps Script / Sheets peut avoir un léger délai : 4 vérifications.
+  for(let attempt=0; attempt<4; attempt++){
+    if(attempt>0) await new Promise(r=>setTimeout(r,1400));
+    try{
+      const payload=await apiJsonp({action:'list'},7000);
+      if(payload && payload.ok===true && Array.isArray(payload.pronos)){
+        if(payload.pronos.some(p=>sameProno(p,d))) return payload.pronos;
+      }
+    }catch(e){
+      console.warn('Tentative de vérification',attempt+1,e);
+    }
+  }
+  throw new Error('Le prono n’a pas été retrouvé dans Google Sheet');
+}
+
 async function submitProno(){
   const d=getData();
   const submitBtn=document.getElementById('submit-prono-btn');
   const othersBtn=document.getElementById('other-pronos-btn');
   const hint=document.getElementById('other-pronos-hint');
   const toast=document.getElementById('toast');
+  const apiStatus=document.getElementById('apiStatus');
 
   if(!d.prenom){
     toast.textContent='Indique ton prénom avant de valider 🙂';
@@ -1228,23 +1337,24 @@ async function submitProno(){
     submitBtn.textContent='ENREGISTREMENT…';
     submitBtn.disabled=true;
   }
+  if(apiStatus){
+    apiStatus.textContent='Envoi vers Google Sheet…';
+    apiStatus.className='api-status';
+  }
 
   try{
-    const body = new URLSearchParams();
-    Object.entries(d).forEach(([k,v])=>body.append(k,v ?? ''));
+    // Envoi cross-origin vers Google Apps Script.
+    await postPronoNoCors(d);
 
-    await fetch(WEB_APP_URL,{
-      method:'POST',
-      mode:'no-cors',
-      headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
-      body:body.toString()
-    });
+    // On ne considère PAS l'envoi comme réussi tant qu'on ne retrouve
+    // pas réellement cette ligne via doGet(action=list).
+    await waitUntilPronoExists(d);
 
     try{
       localStorage.setItem('mpp-baby-prono-'+d.prenom.toLowerCase(),JSON.stringify(d));
     }catch(e){}
 
-    pronoJustSubmitted = d;
+    pronoJustSubmitted=d;
     launchConfetti();
 
     if(submitBtn){
@@ -1256,22 +1366,37 @@ async function submitProno(){
       othersBtn.innerHTML='👀 VOIR LES PRONOS DES AUTRES';
     }
     if(hint){
-      hint.textContent='Ton prono est validé : tu peux maintenant regarder les autres 😏';
+      hint.textContent='Ton prono est bien enregistré : tu peux maintenant regarder les autres 😏';
+    }
+    if(apiStatus){
+      apiStatus.textContent='Google Sheet : prono enregistré ✓';
+      apiStatus.className='api-status ok';
     }
 
-    toast.textContent='Prono envoyé ✓';
+    toast.textContent='Prono enregistré dans Google Sheet ✓';
     toast.classList.add('show');
-    setTimeout(()=>toast.classList.remove('show'),2600);
+    setTimeout(()=>toast.classList.remove('show'),3000);
 
   }catch(err){
     console.error(err);
     if(submitBtn){
-      submitBtn.textContent='VALIDER MON PRONO';
+      submitBtn.textContent='RÉESSAYER LA VALIDATION';
       submitBtn.disabled=false;
     }
-    toast.textContent='Oups… impossible d’envoyer le prono. Réessaie.';
+    if(othersBtn){
+      othersBtn.disabled=true;
+      othersBtn.innerHTML='🔒 VOIR LES PRONOS DES AUTRES';
+    }
+    if(hint){
+      hint.textContent='Disponible après validation confirmée de ton propre prono 😉';
+    }
+    if(apiStatus){
+      apiStatus.textContent='Enregistrement Google Sheet non confirmé ⚠️';
+      apiStatus.className='api-status err';
+    }
+    toast.textContent='Le prono n’a pas pu être confirmé dans Google Sheet.';
     toast.classList.add('show');
-    setTimeout(()=>toast.classList.remove('show'),3200);
+    setTimeout(()=>toast.classList.remove('show'),3800);
   }
 }
 
@@ -1279,57 +1404,27 @@ function openPronosModal(){
   const modal=document.getElementById('pronosModal');
   const btn=document.getElementById('other-pronos-btn');
   if(!modal || !btn || btn.disabled) return;
-
   modal.classList.add('open');
   document.body.style.overflow='hidden';
   loadOtherPronos();
 }
 
-function loadOtherPronos(){
+async function loadOtherPronos(){
   const list=document.getElementById('otherPronosList');
   const status=document.getElementById('pronosStatus');
 
   if(list) list.innerHTML='<div class="prono-empty">Chargement des pronostics… 🐐</div>';
-  if(status) status.innerHTML='⏳ Récupération des pronostics déjà validés…';
+  if(status) status.innerHTML='⏳ Récupération des pronostics réellement enregistrés…';
 
-  const callbackName='mppPronosCallback_'+Date.now();
-
-  window[callbackName]=function(payload){
-    try{
-      if(!payload || !payload.ok){
-        throw new Error(payload && payload.error ? payload.error : 'Réponse invalide');
-      }
-      renderOtherPronos(payload.pronos || []);
-    }catch(err){
-      console.error(err);
-      if(list) list.innerHTML='<div class="prono-empty">Impossible de charger les pronostics pour le moment.</div>';
-      if(status) status.innerHTML='⚠️ Une erreur est survenue pendant le chargement.';
-    }finally{
-      delete window[callbackName];
-      const s=document.getElementById(callbackName);
-      if(s) s.remove();
-    }
-  };
-
-  const script=document.createElement('script');
-  script.id=callbackName;
-  script.src=WEB_APP_URL+'?action=list&callback='+encodeURIComponent(callbackName)+'&_='+Date.now();
-  script.onerror=function(){
+  try{
+    const payload=await apiJsonp({action:'list'},8000);
+    if(!payload || payload.ok!==true) throw new Error(payload?.error || 'Réponse invalide');
+    renderOtherPronos(payload.pronos || []);
+  }catch(err){
+    console.error(err);
     if(list) list.innerHTML='<div class="prono-empty">Impossible de charger les pronostics pour le moment.</div>';
-    if(status) status.innerHTML='⚠️ Vérifie que l’application Apps Script est bien déployée pour « Tout le monde ».';
-    delete window[callbackName];
-    script.remove();
-  };
-  document.body.appendChild(script);
-}
-
-function sameProno(a,b){
-  if(!a || !b) return false;
-  return String(a.prenom||'').trim().toLowerCase()===String(b.prenom||'').trim().toLowerCase()
-    && String(a.dateNaissance||'')===String(b.dateNaissance||'')
-    && String(a.prenomBebe1||'').trim().toLowerCase()===String(b.prenomBebe1||'').trim().toLowerCase()
-    && String(a.prenomBebe2||'').trim().toLowerCase()===String(b.prenomBebe2||'').trim().toLowerCase()
-    && String(a.prenomBebe3||'').trim().toLowerCase()===String(b.prenomBebe3||'').trim().toLowerCase();
+    if(status) status.innerHTML='⚠️ Connexion Google Sheet impossible.';
+  }
 }
 
 function renderOtherPronos(pronos){
@@ -1339,8 +1434,6 @@ function renderOtherPronos(pronos){
 
   let items=Array.isArray(pronos) ? pronos.slice() : [];
 
-  // Le prono fraîchement envoyé est normalement la dernière ligne :
-  // on retire une seule occurrence identique pour n'afficher que "les autres".
   if(pronoJustSubmitted){
     for(let i=items.length-1;i>=0;i--){
       if(sameProno(items[i],pronoJustSubmitted)){
@@ -1351,7 +1444,7 @@ function renderOtherPronos(pronos){
   }
 
   if(status){
-    status.innerHTML = items.length
+    status.innerHTML=items.length
       ? '👀 <strong>'+items.length+'</strong> pronostic'+(items.length>1?'s':'')+' déjà joué'+(items.length>1?'s':'')+' avant toi.'
       : '👀 Tu es le premier à avoir joué… pour l’instant 😏';
   }
@@ -1362,8 +1455,10 @@ function renderOtherPronos(pronos){
   }
 
   list.innerHTML=items.map((p,idx)=>{
-    const names=[p.prenomBebe1,p.prenomBebe2,p.prenomBebe3].filter(Boolean).map(escapeHtml).join(' / ');
+    const names=[p.prenomBebe1,p.prenomBebe2,p.prenomBebe3]
+      .filter(Boolean).map(escapeHtml).join(' / ');
     const date=p.dateNaissance ? fmtDate(p.dateNaissance) : '—';
+
     const tags=[
       '📅 '+date,
       p.poids ? '⚖️ '+escapeHtml(p.poids)+' g' : '',
@@ -1397,6 +1492,10 @@ function closePronosModal(event){
   modal.classList.remove('open');
   document.body.style.overflow='';
 }
+
+document.addEventListener('DOMContentLoaded',function(){
+  setTimeout(checkApiConnection,300);
+});
 
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape'){
@@ -1487,17 +1586,15 @@ function animateConfetti(){
     </div>
 
     <div class="demo-note" id="pronosStatus">
-      🐐 Les pronostics déjà validés vont apparaître ici.
+      🐐 Les pronostics réellement enregistrés vont apparaître ici.
     </div>
 
     <div id="otherPronosList">
-      <div class="prono-person">
-        <div class="prono-person-name">Chargement des pronostics…</div>
-      </div>
-    </div>
+      <div class="prono-empty">Chargement…</div>
     </div>
   </div>
 </div>
 
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
