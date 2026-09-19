@@ -924,7 +924,7 @@ body:has(.step[data-step="welcome"].active)::before{
   .step.active{animation:none}
 }
 </style>
-<!-- PETIT PRONO V28 - CHARGEMENT OPTIMISE + FOND PAGE 1 ISOLE -->
+<!-- PETIT PRONO V29 - MODIFICATION VERROUILLEE APRES VALIDATION -->
 </head>
 <body>
 <canvas id="confettiCanvas"></canvas>
@@ -1223,7 +1223,7 @@ body:has(.step[data-step="welcome"].active)::before{
   <p class="muted" style="margin-top:-4px;">Score maximum du quiz : <strong>25 points</strong> + éventuel bonus Team Garçon de <strong>2 points</strong>.</p>
 
   <div class="nav-row">
-    <button class="btn btn-outline" onclick="goTo(7)">MODIFIER</button>
+    <button class="btn btn-outline" id="modify-prono-btn" onclick="goTo(7)">MODIFIER</button>
     <button class="btn btn-gold" id="submit-prono-btn" onclick="submitProno()">VALIDER MON PRONO</button>
   </div>
 
@@ -1263,6 +1263,16 @@ const answers = {
 };
 
 function goTo(step){
+  if(pronoLocked && step===7){
+    const toast=document.getElementById('toast');
+    if(toast){
+      toast.textContent='Ton prono est déjà validé et verrouillé 🔒';
+      toast.classList.add('show');
+      setTimeout(()=>toast.classList.remove('show'),2400);
+    }
+    return;
+  }
+
   document.querySelectorAll('.step').forEach(s=>s.classList.remove('active'));
   const el=document.querySelector('.step[data-step="'+step+'"]');
   if(el){el.classList.add('active');window.scrollTo(0,0)}
@@ -1355,6 +1365,7 @@ let currentSubmissionId = null;
 let currentParticipant = '';
 let pronosPreloaded = false;
 let pronosPreloadUrl = '';
+let pronoLocked = false;
 
 function makeSubmissionId(){
   if(currentSubmissionId) return currentSubmissionId;
@@ -1469,6 +1480,15 @@ function submitProno(){
       submitBtn.disabled=true;
     }
 
+    pronoLocked = true;
+
+    const modifyBtn=document.getElementById('modify-prono-btn');
+    if(modifyBtn){
+      modifyBtn.textContent='PRONO VERROUILLÉ 🔒';
+      modifyBtn.disabled=true;
+      modifyBtn.removeAttribute('onclick');
+    }
+
     if(othersBtn){
       othersBtn.disabled=false;
       othersBtn.innerHTML='👀 VOIR LES PRONOS DES AUTRES';
@@ -1493,6 +1513,15 @@ function submitProno(){
     if(submitBtn){
       submitBtn.textContent='RÉESSAYER LA VALIDATION';
       submitBtn.disabled=false;
+    }
+
+    pronoLocked = false;
+
+    const modifyBtn=document.getElementById('modify-prono-btn');
+    if(modifyBtn){
+      modifyBtn.textContent='MODIFIER';
+      modifyBtn.disabled=false;
+      modifyBtn.setAttribute('onclick','goTo(7)');
     }
 
     if(othersBtn){
